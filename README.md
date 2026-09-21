@@ -67,8 +67,6 @@ Here are sample commands for choosing the audio input (assuming the device is /d
 - Set to HDMI audio: `v4l2-ctl -d /dev/video0 --set-audio-input=0`
 - Set to 3.5mm audio jack: `v4l2-ctl -d /dev/video0 --set-audio-input=1`
 
-The 3.5mm audio jack is currently untested. I don't have anything handy to test it. Let me know if it works!
-
 ## Isochronous vs. bulk transport
 
 There is a `force_bulk` parameter you can optionally specify when inserting the module:
@@ -79,7 +77,6 @@ Omit it for most uses. The driver will typically use isochronous transfers by de
 
 ## Still TODO
 
-- The 3.5mm audio input jack is untested.
 - The entire driver likely needs a lot more testing with different people's setups.
 
 ## Credits

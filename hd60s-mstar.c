@@ -1361,15 +1361,6 @@ struct mstar_op {
 
 /*
  * The two audio-source configurations.
- *
- * Selecting an input is this whole block, not one mux bit: the codec's serial
- * interface, its power control, two MCU GPIO pins and the 0xD4 device all move
- * together, and writing the mux bit alone leaves the codec configured for the
- * other source.
- *
- * The line-in block is what the Windows driver does.
- *
- * UNTESTED: nothing has been connected to that jack.
  */
 static const struct mstar_op mstar_audio_embedded[] = {
 	{ OP_I2C, 0x94, 0x09, 0x46 },
@@ -1396,17 +1387,23 @@ static const struct mstar_op mstar_audio_embedded[] = {
 static const struct mstar_op mstar_audio_linein[] = {
 	{ OP_I2C, 0x94, 0x09, 0x46 },
 	{ OP_I2C, 0x94, 0x18, 0x0f },
-	{ OP_MST, 0x02, 0x27, 0xff },
-	{ OP_I2C, 0x94, 0x03, 0xa1 },
-	{ OP_SUBFN, 0x05, 0x01, 0x00 },
-	{ OP_SUBFN, 0x03, 0x01, 0x00 },
-	{ OP_EXT, 0x00, 0x04, 0x80 },
-	{ OP_I2C, 0x94, 0x0e, 0x80 },
-	{ OP_I2C, 0x94, 0x0f, 0x80 },
-	{ OP_I2C, 0x94, 0x10, 0x00 },
-	{ OP_I2C, 0x94, 0x11, 0x00 },
-	{ OP_I2C, 0x94, 0x04, 0x4c },
-	{ OP_I2C, 0x94, 0x07, 0x00 },
+	{ OP_MST, 0x02, 0x27, 0x00 },
+	{ OP_I2C, 0x94, 0x03, 0xa0 },	/* MIC_PWR_CTL   */
+	{ OP_SUBFN, 0x05, 0x00, 0x00 },	/* MCU GPIO 0.5  */
+	{ OP_SUBFN, 0x03, 0x00, 0x00 },	/* MCU GPIO 0.3  */
+	{ OP_EXT, 0x00, 0x04, 0x03 },
+	{ OP_I2C, 0x94, 0x0e, 0x00 },	/* ADCA_MIX_VOL, unmuted */
+	{ OP_I2C, 0x94, 0x0f, 0x00 },	/* ADCB_MIX_VOL, unmuted */
+	{ OP_I2C, 0x94, 0x10, 0x85 },	/* PCM mix muted */
+	{ OP_I2C, 0x94, 0x11, 0x85 },
+	{ OP_I2C, 0x94, 0x04, 0x0e },	/* IFACE_CTL     */
+	{ OP_I2C, 0x94, 0x07, 0x00 },	/* ADC_IN_SEL    */
+	{ OP_I2C, 0x94, 0x0e, 0x0b },
+	{ OP_I2C, 0x94, 0x0f, 0x0b },
+	{ OP_I2C, 0x94, 0x0a, 0x00 },	/* ALC_PGAA      */
+	{ OP_I2C, 0x94, 0x0b, 0x00 },	/* ALC_PGAB      */
+	{ OP_I2C, 0x94, 0x0c, 0x00 },	/* ADCA_ATT      */
+	{ OP_I2C, 0x94, 0x0d, 0x00 },	/* ADCB_ATT      */
 };
 
 /* The apply-mode sequence, generated from a capture of the Windows driver. */
@@ -2497,36 +2494,19 @@ static int mstar_disarm_events(struct hd60s_dev *d)
 }
 
 /*
- * Audio input select. Source 0 is embedded HDMI, source 1 the analog jack. The
- * last step is the board control device's register 0x20 bit 4, cleared for 0
- * and set for 1, but the codec, its power control and two MCU GPIOs all move
- * with it and the bit alone leaves the codec set up for the other source.
+ * Audio input select. Source 0 is embedded HDMI, source 1 the analog jack.
  */
 static int mstar_set_audio(struct hd60s_dev *d, u8 src)
 {
-	int ret, v;
+	int ret;
 
 	if (src > 1)
 		return -EINVAL;
 
 	mutex_lock(&d->ctrl_lock);
 	ret = mstar_write_audio_block(d, src);
-	if (ret < 0)
-		goto out;
-
-	v = chip_read(d, HD60S_I2C_CTL, 0x20);
-	if (v < 0) {
-		ret = v;
-		goto out;
-	}
-	dev_dbg(&d->intf->dev, "audio input %u: 0x98:0x20 %02x -> %02x\n",
-		src, v, src ? (v | 0x10) : (v & ~0x10));
-	ret = chip_write(d, HD60S_I2C_CTL, 0x20,
-			 (u8)(src ? (v | 0x10) : (v & ~0x10)));
-	if (ret < 0)
-		goto out;
-	d->mst.tx_audio_dirty = true;
-out:
+	if (ret == 0)
+		d->mst.tx_audio_dirty = true;
 	mutex_unlock(&d->ctrl_lock);
 	return ret;
 }
