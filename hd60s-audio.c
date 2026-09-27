@@ -22,11 +22,18 @@
 #define HD60S_RATE	48000
 #define HD60S_CHANNELS	2
 
+/*
+ * The position only advances when an URB completes, ~192 frames at a time on
+ * isochronous transport. BATCH says so. Without it a sound server rate-matching
+ * this device to another clock takes the pointer as sample-accurate and
+ * underruns or discards on every burst.
+ */
 static const struct snd_pcm_hardware hd60s_pcm_hw = {
 	.info			= SNDRV_PCM_INFO_MMAP |
 				  SNDRV_PCM_INFO_MMAP_VALID |
 				  SNDRV_PCM_INFO_INTERLEAVED |
-				  SNDRV_PCM_INFO_BLOCK_TRANSFER,
+				  SNDRV_PCM_INFO_BLOCK_TRANSFER |
+				  SNDRV_PCM_INFO_BATCH,
 	.formats		= SNDRV_PCM_FMTBIT_S16_LE,
 	.rates			= SNDRV_PCM_RATE_48000,
 	.rate_min		= HD60S_RATE,
