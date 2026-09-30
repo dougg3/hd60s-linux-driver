@@ -180,6 +180,9 @@ struct hd60s_mstar {
 	u8	blk[5];		/* read once at init, restored on stop         */
 	bool	blk_valid;
 	u32	audio_hz;
+	/* the 0xD4 device's reference select and divider, as last written */
+	u8	d4_sel, d4_reg, d4_val;
+	bool	d4_valid;
 	bool	warned_nomode;	/* only complain about an unmatched mode once  */
 	bool	tx_probed;	/* its ID has been read                        */
 	bool	tx_present;	/* the loop-through transmitter answered       */

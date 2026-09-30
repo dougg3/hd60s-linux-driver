@@ -75,8 +75,11 @@ static int mst_rmw(struct hd60s_dev *d, u8 bank, u8 reg, u8 and_mask, u8 or_mask
 }
 
 /*
- * The 0xD4 device: 208 registers written once at bring-up, with a leading page
- * byte. What the chip is has not been established.
+ * The 0xD4 device, the audio converter that delivers the stream's 48 kHz: 208
+ * registers written once at bring-up, each at a 16-bit address whose high byte
+ * is 0. Its part number is not currently known. The table leaves it converting
+ * as if the source were 32 kHz; mstar_d4_setup() gives it the source's real
+ * clock. Nothing answers at this address on revision 3.
  */
 static const u8 mstar_d4_init[0xD0] = {
 	0x01, 0x00, 0x08, 0x08, 0x80, 0x04, 0x00, 0x01, 0x78, 0x00, 0x11, 0x11,
@@ -99,6 +102,14 @@ static const u8 mstar_d4_init[0xD0] = {
 	0x6c, 0x6c, 0x74, 0x74,
 };
 
+static int ext_write(struct hd60s_dev *d, u8 reg, u8 val)
+{
+	u8 tx[3] = { 0x00, reg, val };
+
+	lockdep_assert_held(&d->ctrl_lock);
+	return hd60s_i2c_write(d, HD60S_I2C_EXT, tx, sizeof(tx));
+}
+
 static int mstar_ext_init(struct hd60s_dev *d)
 {
 	unsigned int i;
@@ -117,6 +128,7 @@ static int mstar_ext_init(struct hd60s_dev *d)
 		 */
 		hd60s_i2c_read(d, HD60S_I2C_EXT, rd, sizeof(rd), &back, 1);
 	}
+	d->mst.d4_valid = false;
 	return 0;
 }
 
@@ -1504,6 +1516,7 @@ static int mstar_write_audio_block(struct hd60s_dev *d, u8 src)
 	unsigned int n = src ? ARRAY_SIZE(mstar_audio_linein)
 			     : ARRAY_SIZE(mstar_audio_embedded);
 
+	d->mst.d4_valid = false;
 	return mstar_run_ops(d, seq, n, 0);
 }
 
@@ -1672,6 +1685,155 @@ static u32 mstar_audio_rate(struct hd60s_dev *d)
 		if (v >= ref[i] - 30u && v <= ref[i] + 30u)
 			return rate[i] * 100u;
 	return 0;
+}
+
+/*
+ * The source's dot clock in kHz, recovered from its audio clock regeneration
+ * packet: TMDS = 128 * fs * CTS / N, less the deep-color ratio in bank 2 0x47,
+ * then snapped to a standard clock within 1/2000. The two 13.5 MHz entries are
+ * pixel-repeated rates and are divided by the repetition in 0x4C. Returns 0 if
+ * a register read fails.
+ */
+static u32 mstar_dotclock(struct hd60s_dev *d, u32 fs100)
+{
+	static const u32 std[16] = {
+		13500, 135135, 25175, 25200, 27000, 27027, 74250, 74175,
+		148500, 148351, 54000, 54054, 108000, 108108, 297000, 296703,
+	};
+	int r[8], rep;
+	unsigned int i;
+	u32 cts, n, clk;
+
+	for (i = 0; i < 6; i++) {
+		r[i] = mst_read(d, 2, 0x40 + i);
+		if (r[i] < 0)
+			return 0;
+	}
+	r[6] = mst_read(d, 2, 0x47);
+	if (r[6] < 0)
+		return 0;
+
+	cts = (r[2] & 0xf) << 16 | r[1] << 8 | r[0];
+	n = (r[5] & 0xf) << 16 | r[4] << 8 | r[3];
+	if (!n)
+		n = 1;
+	clk = div_u64((u64)fs100 * cts * 128 + n * 5, n * 10);
+
+	switch (r[6] & 0xf) {
+	case 5:
+		clk = clk * 4 / 5;
+		break;
+	case 6:
+		clk = clk * 2 / 3;
+		break;
+	case 7:
+		clk /= 2;
+		break;
+	}
+
+	for (i = 0; i < ARRAY_SIZE(std); i++) {
+		if (clk < std[i] - std[i] / 2000 || clk > std[i] + std[i] / 2000)
+			continue;
+		clk = std[i];
+		if (i < 2) {
+			rep = mst_read(d, 2, 0x4c);
+			if (rep < 0)
+				return 0;
+			clk /= (rep & 0xf) + 1;
+		}
+		break;
+	}
+	return clk;
+}
+
+/*
+ * The 0xD4 device converts the received audio to the 48 kHz the stream
+ * carries, and has to be told the clock it is fed from. Register 0x01 selects a
+ * reference and each reference has its own divider: 2 for the 74.25 MHz family
+ * (0x2A), 3 for 74.25/1.001 (0x2B), 4 for 27 MHz (0x2E), 5 for 27/1.001 (0x2F,
+ * 0x39). Any other dot clock falls back to the audio rate itself -- 0 with 0x10
+ * for the 32/48 kHz family, 1 with 0x11 for 44.1 kHz.
+ *
+ * The Windows driver writes them on every poll; this driver only writes them
+ * when they change.
+ */
+static void mstar_d4_setup(struct hd60s_dev *d, u32 fs100)
+{
+	static const u16 fs_rate[7] = { 320, 441, 480, 882, 960, 1764, 1920 };
+	static const u8 fs_div[8] = { 2, 21, 3, 42, 6, 84, 12, 0 };
+	u8 reg, val, sel;
+	unsigned int i;
+	u32 clk;
+	int ret;
+
+	clk = mstar_dotclock(d, fs100);
+	if (!clk)
+		return;
+
+	switch (clk) {
+	case 13500:
+	case 27000:
+		reg = 0x2e;
+		val = clk == 27000 ? 0x40 : 0x80;
+		sel = 4;
+		break;
+	case 13513:
+	case 27027:
+		reg = 0x39;
+		val = clk != 27027;
+		sel = 5;
+		break;
+	case 74175:
+	case 148351:
+		reg = 0x2b;
+		val = clk == 74175 ? 0x2d : 0x5a;
+		sel = 3;
+		break;
+	case 74250:
+	case 148500:
+		reg = 0x2a;
+		val = clk == 74250 ? 0x37 : 0x6e;
+		sel = 2;
+		break;
+	default:
+		for (i = 0; i < ARRAY_SIZE(fs_rate); i++)
+			if (fs_rate[i] == fs100)
+				break;
+		val = fs_div[i];
+		sel = val > 20;
+		reg = 0x10 + sel;
+		break;
+	}
+
+	/*
+	 * Only write if a register value is changing.
+	 */
+	if (d->mst.d4_valid && sel == d->mst.d4_sel &&
+	    reg == d->mst.d4_reg && val == d->mst.d4_val)
+		return;
+
+	if (sel == 5) {
+		ret = ext_write(d, 0x2f, val ? 0 : 0x80);
+		if (ret < 0)
+			goto err;
+	}
+	ret = ext_write(d, reg, val);
+	if (ret < 0)
+		goto err;
+	ret = ext_write(d, 0x01, sel);
+	if (ret < 0)
+		goto err;
+
+	d->mst.d4_sel = sel;
+	d->mst.d4_reg = reg;
+	d->mst.d4_val = val;
+	d->mst.d4_valid = true;
+	dev_dbg(&d->intf->dev,
+		"audio converter: dot clock %u kHz, %u Hz, 0x01 = %u, %02x = %02x\n",
+		clk, fs100 * 100, sel, reg, val);
+	return;
+err:
+	d->mst.d4_valid = false;
 }
 
 /* Blank the output, as the Windows driver does on loss of sync. */
@@ -2413,6 +2575,9 @@ avi_done:
 	 * Nothing touches the chip until the MCU has finished bringing it up;
 	 * mstar_tx_ready() asks it rather than waiting a fixed time.
 	 */
+	if (audio)
+		mstar_d4_setup(d, audio / 100);
+
 	mstar_tx_poll(d);
 
 	*signal = true;
