@@ -686,29 +686,17 @@ static void hd60s_parser_reset(struct hd60s_dev *d)
 	d->resubmit_err = 0;
 }
 
-static int hd60s_start_streaming(struct vb2_queue *q, unsigned int count)
+/*
+ * Bring up the transport. Needs a signal: the alt setting is sized from the
+ * detected mode. On failure the ring is freed and the buffers are left with
+ * the caller.
+ */
+static int hd60s_start_capture(struct hd60s_dev *d)
 {
-	struct hd60s_dev *d = vb2_get_drv_priv(q);
 	struct hd60s_parser *p = &d->p;
 	int alt, ret;
 
-	if (d->gone) {
-		ret = -ENODEV;
-		goto err;
-	}
-	if (!d->signal) {
-		dev_dbg(&d->intf->dev, "cannot start: no signal\n");
-		ret = -ENOLINK;
-		goto err;
-	}
-
-	/*
-	 * Geometry is snapshotted here and not revisited. A mode change
-	 * mid-stream would resize the frame under buffers userspace already
-	 * owns, so it is published as V4L2_EVENT_SOURCE_CHANGE and acted on by
-	 * a stop/start.
-	 */
-	hd60s_parser_reset(d);
+	lockdep_assert_held(&d->vlock);
 
 	/*
 	 * A stream started before the detected mode was adopted can never find
@@ -743,11 +731,13 @@ static int hd60s_start_streaming(struct vb2_queue *q, unsigned int count)
 
 	ret = hd60s_alloc_urbs(d);
 	if (ret < 0)
-		goto err;
+		return ret;
 
 	ret = hd60s_start_transport(d, alt);
-	if (ret < 0)
-		goto err_urbs;
+	if (ret < 0) {
+		hd60s_free_urbs(d);
+		return ret;
+	}
 
 	d->wd_bytes = 0;
 	d->wd_tick = 0;
@@ -758,12 +748,68 @@ static int hd60s_start_streaming(struct vb2_queue *q, unsigned int count)
 		d->fmt.width, d->fmt.height, p->interlaced ? "i" : "p",
 		d->alt, d->use_bulk ? "bulk" : "isochronous");
 	return 0;
+}
 
-err_urbs:
-	hd60s_free_urbs(d);
+/*
+ * Start a capture: snapshot the geometry, then bring up the transport, or leave
+ * that to the status poll if there is no signal yet.
+ */
+static int hd60s_start_streaming(struct vb2_queue *q, unsigned int count)
+{
+	struct hd60s_dev *d = vb2_get_drv_priv(q);
+	int ret;
+
+	if (d->gone) {
+		ret = -ENODEV;
+		goto err;
+	}
+
+	/*
+	 * Geometry is snapshotted here and not revisited. A mode change
+	 * mid-stream would resize the frame under buffers userspace already
+	 * owns, so it is published as V4L2_EVENT_SOURCE_CHANGE and acted on by
+	 * a stop/start.
+	 */
+	hd60s_parser_reset(d);
+
+	if (!d->signal) {
+		dev_dbg(&d->intf->dev, "no signal: the transport starts when one arrives\n");
+		d->await_signal = true;
+		return 0;
+	}
+
+	ret = hd60s_start_capture(d);
+	if (ret < 0)
+		goto err;
+	return 0;
+
 err:
 	hd60s_return_buffers(d, VB2_BUF_STATE_QUEUED);
 	return ret;
+}
+
+/*
+ * Called by the status poll, under vlock, when a signal arrives: starts the
+ * transport for a capture that was waiting for one.
+ */
+void hd60s_video_signal(struct hd60s_dev *d)
+{
+	int ret;
+
+	if (!d->await_signal)
+		return;
+	d->await_signal = false;
+
+	ret = hd60s_start_capture(d);
+	if (ret < 0) {
+		/*
+		 * The application has already been told the stream started, so
+		 * the failure can only reach it through DQBUF.
+		 */
+		dev_err(&d->intf->dev,
+			"could not start the transport on signal (%d)\n", ret);
+		vb2_queue_error(&d->queue);
+	}
 }
 
 static void hd60s_stop_streaming(struct vb2_queue *q)
@@ -773,9 +819,14 @@ static void hd60s_stop_streaming(struct vb2_queue *q)
 
 	cancel_delayed_work_sync(&d->watchdog);
 
-	mutex_lock(&d->ctrl_lock);
-	hd60s_stop_transport(d);
-	mutex_unlock(&d->ctrl_lock);
+	/* Still waiting for a signal: nothing went out on the wire. */
+	if (d->await_signal) {
+		d->await_signal = false;
+	} else {
+		mutex_lock(&d->ctrl_lock);
+		hd60s_stop_transport(d);
+		mutex_unlock(&d->ctrl_lock);
+	}
 
 	hd60s_free_urbs(d);
 	hd60s_return_buffers(d, VB2_BUF_STATE_ERROR);

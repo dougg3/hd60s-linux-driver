@@ -270,6 +270,8 @@ struct hd60s_dev {
 	int			alt;
 	bool			use_bulk;
 	bool			streaming;
+	/* vb2 is streaming but there was no signal to start the transport on */
+	bool			await_signal;
 	/* the transport was live when the system suspended; resume re-arms it */
 	bool			pm_streaming;
 	/* URB completion only, where the HCD serializes; not atomic */
@@ -341,6 +343,8 @@ int hd60s_video_register(struct hd60s_dev *d);
 void hd60s_video_unregister(struct hd60s_dev *d);
 void hd60s_video_suspend(struct hd60s_dev *d);
 void hd60s_video_resume(struct hd60s_dev *d);
+/* vlock held */
+void hd60s_video_signal(struct hd60s_dev *d);
 void hd60s_watchdog(struct work_struct *work);
 
 /* audio */

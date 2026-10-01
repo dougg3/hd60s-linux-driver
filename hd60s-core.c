@@ -450,9 +450,10 @@ static void hd60s_state_work(struct work_struct *work)
 		/*
 		 * d->cfg is not touched: V4L2 forbids adopting a detected mode
 		 * on the driver's own initiative. The one exception is the
-		 * first lock-on, which the guard makes unrepeatable.
+		 * first lock-on, which the guard makes unrepeatable, and even
+		 * that waits while buffers sized from the placeholder exist.
 		 */
-		if (signal && !d->cfg_locked) {
+		if (signal && !d->cfg_locked && !vb2_is_busy(&d->queue)) {
 			d->cfg = t;
 			d->cfg_locked = true;
 			hd60s_update_format(d);
@@ -492,6 +493,8 @@ static void hd60s_state_work(struct work_struct *work)
 					WRITE_ONCE(d->p.stale, false);
 				}
 			}
+
+			hd60s_video_signal(d);
 		} else {
 			dev_info(&d->intf->dev, "signal lost\n");
 		}
