@@ -69,7 +69,20 @@ The driver cannot fix this issue while a capture is running, because resolution 
 
 `gst-launch-1.0 v4l2src device=/dev/video0 ! videoconvert ! autovideosink`
 
-I believe this is ultimately a problem with OBS that people typically don't encounter because most consumer USB capture cards used in Linux have a scaler. Maybe OBS can be changed to add behavior similar to GStreamer.
+I believe this is ultimately a problem with OBS that people typically don't encounter because most consumer USB capture cards used in Linux have a scaler. Maybe OBS can be changed to add behavior similar to GStreamer. In the meantime, there is a workaround for OBS.
+
+### OBS Workaround
+
+I've developed (with Claude) a Lua script that you can add to OBS. With this script enabled, it will automatically detect resolution changes. When the HDMI mode changes, it will automatically stop and restart the video device so that the video continues to work.
+
+To install this script:
+
+- Open up OBS
+- Go to Tools -> Scripts
+- Click the + button
+- Navigate to the `scripts/hd60s-follow-timings.lua` script in this repository.
+
+Now the script is installed.
 
 ## Audio input
 
