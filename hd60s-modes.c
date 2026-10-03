@@ -394,7 +394,9 @@ static const struct hd60s_mode hd60s_modes[] = {
  * Tolerances. The measured values are quantized by the chip's counters:
  * htotal comes from a 12-bit TMDS-clock count scaled by the deep-color ratio,
  * hactive is rounded up to even, and fv is 1250000/period, so near 60 Hz one
- * count of the period counter is about 0.3 Hz.  vtotal is exact.
+ * count of the period counter is about 0.3 Hz.  vtotal is exact, but an
+ * interlaced source alternates between its two field lengths -- 562 and 563
+ * at 1080i -- and the tables hold only one of them.
  */
 #define HD60S_TOL_HTOTAL	8
 #define HD60S_TOL_HACTIVE	2
@@ -414,10 +416,15 @@ const struct hd60s_mode *hd60s_find_mode(u16 hactive, u16 htotal, u16 vtotal,
 
 	for (i = 0; i < ARRAY_SIZE(hd60s_modes); i++) {
 		const struct hd60s_mode *m = &hd60s_modes[i];
-		int dh, da, df, rep, score;
+		int dh, da, df, dv, rep, score;
 
-		/* vtotal is exact. */
-		if (m->vtotal != vtotal)
+		/*
+		 * vtotal within one line for an interlaced source against an
+		 * interlaced row, exactly otherwise -- the Windows driver's
+		 * GetTotalDisplayModeIndex rule.
+		 */
+		dv = absdiff(m->vtotal, vtotal);
+		if (dv > ((interlaced && m->interlaced) ? 1 : 0))
 			continue;
 
 		if (!!m->interlaced != interlaced &&
@@ -456,7 +463,7 @@ const struct hd60s_mode *hd60s_find_mode(u16 hactive, u16 htotal, u16 vtotal,
 		 * a CEA mode is far likelier than a PC mode that happens to
 		 * share a vtotal.
 		 */
-		score = da * 64 + dh * 8 + df + rep * 2 +
+		score = da * 64 + dv * 64 + dh * 8 + df + rep * 2 +
 			(m->src == HD60S_MT_EIA ? 0 : 4);
 		if (score < best_score) {
 			best_score = score;
