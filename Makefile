@@ -6,6 +6,11 @@ hd60s-y := hd60s-core.o hd60s-video.o hd60s-audio.o hd60s-parse.o \
 KDIR ?= /lib/modules/$(shell uname -r)/build
 PWD  := $(shell pwd)
 
+# Kernels built with clang (e.g. CachyOS) need modules built with clang too
+ifneq ($(shell grep -s '^CONFIG_CC_IS_CLANG=y' $(KDIR)/.config),)
+export LLVM ?= 1
+endif
+
 all:
 	$(MAKE) -C $(KDIR) M=$(PWD) modules
 
