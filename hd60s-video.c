@@ -1142,9 +1142,7 @@ static int hd60s_g_dv_timings(struct file *file, void *priv,
 
 /*
  * The receiver locks to whatever the source sends, so the only timings that
- * can be set are the ones currently detected. What S_DV_TIMINGS does that
- * nothing else may is adopt them: it is the one path allowed to move d->cfg,
- * and therefore d->fmt, to a newly detected mode.
+ * can be set are the ones currently detected.
  */
 static int hd60s_s_dv_timings(struct file *file, void *priv,
 			      struct v4l2_dv_timings *t)
@@ -1320,10 +1318,29 @@ static const struct v4l2_ioctl_ops hd60s_ioctl_ops = {
 	.vidioc_unsubscribe_event	= v4l2_event_unsubscribe,
 };
 
+/*
+ * Releases the file handle, then adopts the detected mode if no handles remain,
+ * so a client that reopens at once need not wait for the poll to do it.
+ */
+static int hd60s_release(struct file *file)
+{
+	struct hd60s_dev *d = video_drvdata(file);
+	int ret;
+
+	/* Before taking vlock: vb2_fop_release() takes it itself. */
+	ret = vb2_fop_release(file);
+
+	mutex_lock(&d->vlock);
+	if (!d->gone)
+		hd60s_follow_detected(d);
+	mutex_unlock(&d->vlock);
+	return ret;
+}
+
 static const struct v4l2_file_operations hd60s_fops = {
 	.owner		= THIS_MODULE,
 	.open		= v4l2_fh_open,
-	.release	= vb2_fop_release,
+	.release	= hd60s_release,
 	.read		= vb2_fop_read,
 	.poll		= vb2_fop_poll,
 	.mmap		= vb2_fop_mmap,

@@ -250,11 +250,12 @@ struct hd60s_dev {
 	struct hd60s_timing	tm;
 	bool			signal;
 	/*
-	 * What S_DV_TIMINGS last accepted, and all d->fmt and G_DV_TIMINGS
-	 * derive from. The driver may not switch timings on its own: it posts
-	 * V4L2_EVENT_SOURCE_CHANGE and userspace adopts the new mode. cfg
-	 * starts at a placeholder so G_DV_TIMINGS can answer immediately;
-	 * cfg_locked says it has since been replaced by something real.
+	 * The mode d->fmt and G_DV_TIMINGS derive from. Clients adopt a new
+	 * mode with S_DV_TIMINGS; the driver also adopts a new mode itself
+	 * in certain cases, if it is safe to do so (hd60s_follow_detected()).
+	 * cfg starts at a placeholder so G_DV_TIMINGS can answer
+	 * immediately; cfg_locked says it has since been replaced by
+	 * something real.
 	 */
 	struct hd60s_timing	cfg;
 	bool			cfg_locked;
@@ -334,6 +335,7 @@ int hd60s_vout_nolock(struct hd60s_dev *d, u8 req, u16 val, u16 idx,
 int hd60s_stream_enable_nolock(struct hd60s_dev *d, bool on);
 int hd60s_disarm_events_nolock(struct hd60s_dev *d);
 void hd60s_update_format(struct hd60s_dev *d);
+void hd60s_follow_detected(struct hd60s_dev *d);
 int hd60s_apply_color_range(struct hd60s_dev *d);
 void hd60s_timings_from(const struct hd60s_timing *t,
 			struct v4l2_dv_timings *dv);

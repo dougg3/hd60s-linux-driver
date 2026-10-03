@@ -404,6 +404,43 @@ static bool hd60s_timing_eq(const struct hd60s_timing *a,
 	       a->audio_khz == b->audio_khz;
 }
 
+/* Whether no file handle is open on the video node. */
+static bool hd60s_unopened(struct hd60s_dev *d)
+{
+	unsigned long flags;
+	bool none;
+
+	/* fh_lock is only initialised by registration. */
+	if (!d->registered)
+		return false;
+	spin_lock_irqsave(&d->vdev.fh_lock, flags);
+	none = list_empty(&d->vdev.fh_list);
+	spin_unlock_irqrestore(&d->vdev.fh_lock, flags);
+	return none;
+}
+
+/*
+ * V4L2 says a driver shall not switch timings on its own, because new timings
+ * mean new buffer sizes. With no file handle open there are no buffers and no
+ * client holding the old format, and S_DV_TIMINGS accepts only the detected
+ * mode anyway (due to how the HD60 S works), so it makes sense in this case
+ * to ignore the rule and automatically adopt the timing. The first lock-on is
+ * also adopted with handles open, as long as no buffers were sized from the
+ * placeholder.
+ */
+void hd60s_follow_detected(struct hd60s_dev *d)
+{
+	lockdep_assert_held(&d->vlock);
+
+	if (d->signal && !hd60s_timing_eq(&d->cfg, &d->tm) &&
+	    ((!d->cfg_locked && !vb2_is_busy(&d->queue)) ||
+	     hd60s_unopened(d))) {
+		d->cfg = d->tm;
+		d->cfg_locked = true;
+		hd60s_update_format(d);
+	}
+}
+
 static void hd60s_state_work(struct work_struct *work)
 {
 	struct hd60s_dev *d = container_of(work, struct hd60s_dev, state_work.work);
@@ -447,17 +484,6 @@ static void hd60s_state_work(struct work_struct *work)
 	if (changed) {
 		d->tm = t;
 		d->signal = signal;
-		/*
-		 * d->cfg is not touched: V4L2 forbids adopting a detected mode
-		 * on the driver's own initiative. The one exception is the
-		 * first lock-on, which the guard makes unrepeatable, and even
-		 * that waits while buffers sized from the placeholder exist.
-		 */
-		if (signal && !d->cfg_locked && !vb2_is_busy(&d->queue)) {
-			d->cfg = t;
-			d->cfg_locked = true;
-			hd60s_update_format(d);
-		}
 		if (signal) {
 			bool il = hd60s_interlaced(&t);
 			u32 dw = t.hactive, dh = t.vactive * (il ? 2 : 1);
@@ -499,6 +525,8 @@ static void hd60s_state_work(struct work_struct *work)
 			dev_info(&d->intf->dev, "signal lost\n");
 		}
 	}
+
+	hd60s_follow_detected(d);
 
 	mutex_unlock(&d->vlock);
 
@@ -730,7 +758,7 @@ static void hd60s_init_work(struct work_struct *work)
 		d->signal = true;
 		/*
 		 * Seed cfg from the wire so a client that never touches DV
-		 * timings still gets a usable format. Only S_DV_TIMINGS after.
+		 * timings still gets a usable format.
 		 */
 		d->cfg = d->tm;
 		d->cfg_locked = true;

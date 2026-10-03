@@ -44,17 +44,11 @@ This leads to situations like the following kernel message you will see if you c
 
 `source changed to 1920x1080 while streaming 1280x720, frames stop until the capture is restarted`
 
-OBS doesn't know how to handle this situation. The message implies that all you have to do is stop and restart the capture, but you will find that it won't actually fix the problem. You'll just get this message instead:
+OBS doesn't know how to handle this situation, because it doesn't subscribe to `V4L2_EVENT_SOURCE_CHANGE` events.
 
-`source is 1920x1080 but the capture is 1280x720, frames stop until the new timings are set`
+To work around this problem, close the capture device and reopen it after a resolution change. The driver will automatically adopt the new timing when no program has the capture device open. To do this in OBS, you can either close and reopen OBS itself, or change one of the source's settings (for example the DV Timing or Color Range) to force it to reopen the device.
 
-You can fix this by running this command to select the new timing (assuming your device is /dev/video0):
-
-`v4l2-ctl -d /dev/video0 --set-dv-bt-timings query`
-
-So in summary, to work around this problem, close the capture device, run the command above, and then reopen the capture device after a resolution change.
-
-My understanding is that this is typical V4L2 device behavior in Linux, and this driver is handling the situation correctly. For example, GStreamer handles resolution changes with this driver automatically and seamlessly. Here's a sample pipeline:
+The driver cannot fix this issue while a capture is running, because resolution changes result in different buffer sizes. The program in charge of the capture has to intentionally look for these types of events, and then reallocate its buffers for the new resolution. For example, GStreamer handles resolution changes with this driver automatically and seamlessly. Here's a sample pipeline:
 
 `gst-launch-1.0 v4l2src device=/dev/video0 ! videoconvert ! autovideosink`
 
