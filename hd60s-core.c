@@ -448,12 +448,12 @@ static void hd60s_state_work(struct work_struct *work)
 		d->tm = t;
 		d->signal = signal;
 		/*
-		 * d->cfg is not touched: V4L2 forbids adopting a detected mode
-		 * on the driver's own initiative. The one exception is the
-		 * first lock-on, which the guard makes unrepeatable, and even
-		 * that waits while buffers sized from the placeholder exist.
+		 * Follow the source whenever no buffers exist, so the next
+		 * open gets the current mode without S_DV_TIMINGS. Sources
+		 * like the Wii switch modes during boot, and locking to the
+		 * first one left OBS capturing the wrong geometry.
 		 */
-		if (signal && !d->cfg_locked && !vb2_is_busy(&d->queue)) {
+		if (signal && !vb2_is_busy(&d->queue)) {
 			d->cfg = t;
 			d->cfg_locked = true;
 			hd60s_update_format(d);
