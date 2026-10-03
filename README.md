@@ -36,6 +36,23 @@ sudo insmod hd60s.ko
 
 Note that if you have Secure Boot turned on, you will get an error about the key being rejected by the service. My recommendation is just to leave Secure Boot turned off if you are playing with this driver. Otherwise, there is a whole process you can follow to enroll a key using mokutil and then sign the hd60s.ko module after compiling it.
 
+## Installing with DKMS
+
+To have the driver rebuilt automatically on kernel updates and loaded at boot, install `dkms` with your package manager and run:
+
+```
+sudo ./dkms-install.sh
+```
+
+The script can be re-run after pulling new changes. It unbinds and unloads the running driver first, so you don't need to reboot. To uninstall:
+
+```
+sudo dkms remove hd60s/0.1 --all
+sudo rm -rf /usr/src/hd60s-0.1 /etc/modules-load.d/hd60s.conf
+```
+
+DKMS signs the module with its own key (`/var/lib/dkms/mok.pub`). If your kernel enforces module signatures under Secure Boot, enroll that key with `mokutil --import`.
+
 ## Important info about resolution changes
 
 The HD60 S is unlike a lot of other capture devices that provide scaling. With most consumer USB capture devices, such as devices that use the generic UVC driver, you pick a capture resolution and the HDMI input will be scaled to whatever size you ask. On the other hand, the HD60 S doesn't allow you to pick a target size. It only offers a direct output stream of the resolution it has detected.
